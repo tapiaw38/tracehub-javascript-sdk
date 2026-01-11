@@ -34,6 +34,12 @@ export interface TraceHubConfig {
 
   /** Enable debug mode */
   debug?: boolean;
+
+  /** Maximum number of retry attempts for failed requests */
+  maxRetries?: number;
+
+  /** Retry delay in milliseconds (exponential backoff multiplier) */
+  retryDelay?: number;
 }
 
 export interface TracePayload {

@@ -23,6 +23,8 @@ export class TraceHubClient {
       batchSize: 50,
       flushInterval: 5000,
       debug: false,
+      maxRetries: 3,
+      retryDelay: 1000,
       ...config,
     };
 
@@ -156,21 +158,59 @@ export class TraceHubClient {
    */
 
   private async sendTrace(trace: TracePayload): Promise<void> {
-    try {
-      const url = `/api/v1/traces?project_id=${this.config.projectId}`;
-      await this.httpClient.post<TraceHubResponse>(url, trace);
-    } catch (error) {
-      this.handleError(error);
-    }
+    const url = `/api/v1/traces?project_id=${this.config.projectId}`;
+    await this.sendWithRetry(() => this.httpClient.post<TraceHubResponse>(url, trace));
   }
 
   private async sendBatch(batch: BatchTracePayload): Promise<void> {
-    try {
-      const url = `/api/v1/traces/batch?project_id=${this.config.projectId}`;
-      await this.httpClient.post<TraceHubResponse>(url, batch);
-    } catch (error) {
-      this.handleError(error);
+    const url = `/api/v1/traces/batch?project_id=${this.config.projectId}`;
+    await this.sendWithRetry(() => this.httpClient.post<TraceHubResponse>(url, batch));
+  }
+
+  private async sendWithRetry<T>(requestFn: () => Promise<T>): Promise<T> {
+    let lastError: unknown;
+    
+    for (let attempt = 0; attempt <= this.config.maxRetries; attempt++) {
+      try {
+        return await requestFn();
+      } catch (error) {
+        lastError = error;
+        
+        if (attempt === this.config.maxRetries) {
+          break;
+        }
+
+        const isRetryable = this.isRetryableError(error);
+        if (!isRetryable) {
+          break;
+        }
+
+        const delay = this.config.retryDelay * Math.pow(2, attempt);
+        if (this.config.debug) {
+          console.log(`[TraceHub] Request failed, retrying in ${delay}ms (attempt ${attempt + 1}/${this.config.maxRetries})`);
+        }
+        
+        await this.sleep(delay);
+      }
     }
+
+    this.handleError(lastError);
+    throw lastError;
+  }
+
+  private isRetryableError(error: unknown): boolean {
+    if (axios.isAxiosError(error)) {
+      const status = error.response?.status;
+      if (!status) {
+        return true;
+      }
+      return status >= 500 || status === 408 || status === 429;
+    }
+    return true;
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   private setupAutoFlush(): void {
